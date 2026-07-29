@@ -1,6 +1,6 @@
 /**
  * CRÔNICAS DO INFINITO - SCRIPT PRINCIPAL
- * Versão Completa com Gerenciamento de Fotos, Permissões de Trocas e Exclusão/Limpeza no Painel do Mestre
+ * Versão Completa com Gerenciamento de Fotos, Expressões, Permissões de Trocas e Exclusão/Limpeza no Painel do Mestre
  */
 
 const ATTR = ["Físico", "Agilidade", "Inteligência", "Percepção", "Vontade", "Presença"];
@@ -17,80 +17,23 @@ const OFFICIAL_SKILLS = [
 const ICONS_LIST = ["🗡️", "🛡️", "🔮", "🔥", "⚡", "📜", "🗝️", "🎯", "🧬", "🧪", "🕵️", "💣", "🩸", "🕯️", "👻"];
 
 // Estado Global
-const STORAGE_KEY = "cdi_fase1_full";
+let state = JSON.parse(localStorage.getItem("cdi_fase1_full")) || { masters: [], campaigns: [] };
 
-function normalizeState() {
-  state.masters ??= [];
-  state.campaigns?.forEach(c => {
-    c.masterId ??= "m1";
-    c.diceLogs ??= [];
-    c.customSkills ??= [...OFFICIAL_SKILLS];
-    c.items ??= [];
-    c.evidence ??= [];
-    c.itemTransfers ??= [];
-  });
-}
-
-function loadState() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed && typeof parsed === "object") return parsed;
-    }
-  } catch (err) {
-    console.warn("Erro ao carregar estado local:", err);
-  }
-  return { masters: [], campaigns: [] };
-}
-
-let state = loadState();
-normalizeState();
+state.masters ??= [];
+state.campaigns?.forEach(c => {
+  c.masterId ??= "m1";
+  c.diceLogs ??= [];
+  c.customSkills ??= [...OFFICIAL_SKILLS];
+  c.items ??= [];
+  c.evidence ??= [];
+  c.itemTransfers ??= [];
+});
 
 let session = { role: null, campaign: null, player: null, currentMaster: null, view: "home" };
 
 const root = document.getElementById("root");
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-
-function save() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  syncStateToServer();
-}
-
-async function syncStateToServer() {
-  try {
-    await fetch("/api/state", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(state)
-    });
-  } catch (err) {
-    console.warn("Sincronização remota indisponível:", err);
-  }
-}
-
-async function loadStateFromServer() {
-  try {
-    const response = await fetch("/api/state");
-    if (!response.ok) return;
-
-    const remote = await response.json();
-    const hasRemoteData = Boolean(remote?.masters?.length || remote?.campaigns?.length);
-    if (hasRemoteData) {
-      state = remote;
-      normalizeState();
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      if (session.role) render();
-    }
-  } catch (err) {
-    console.warn("Não foi possível carregar estado remoto:", err);
-  }
-}
-
-window.addEventListener("load", () => {
-  loadStateFromServer();
-});
-
+const save = () => localStorage.setItem("cdi_fase1_full", JSON.stringify(state));
 const esc = s => String(s ?? "").replace(/[&<>"']/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
 const imgInput = (id, label) => `<label>${label}</label><input id="${id}" type="file" accept="image/*">`;
 
@@ -525,9 +468,7 @@ function executeDeleteMasterAccount() {
     return;
   }
 
-  // Remove campanhas do mestre
   state.campaigns = state.campaigns.filter(c => c.masterId !== session.currentMaster.id);
-  // Remove o mestre
   state.masters = state.masters.filter(m => m.id !== session.currentMaster.id);
 
   save();
@@ -631,13 +572,14 @@ function characterModal(index = null) {
   const c = session.campaign;
   const x = index === null ? { name: "", origin: ORIGINS[0], healthMax: 20, health: 20, sanityMax: 10, sanity: 10, defense: 10, attrs: {}, res: {}, skills: [], expressions: [], activeExpression: "" } : c.characters[index];
   x.skills ??= [];
+  x.expressions ??= [];
 
   root.insertAdjacentHTML("beforeend", `
     <div class="modal"><div class="modalbox">
       <h2>👑 Ficha (Mestre)</h2>
       ${x.image ? `<img class="avatar" src="${x.image}" style="cursor:pointer;" onclick="openImageModal('${x.image}', '${esc(x.name)}')">` : ""}
       <label>Nome</label><input id="cname" value="${esc(x.name)}">
-      ${imgInput("photo", "Imagem")}
+      ${imgInput("photo", "Imagem Principal")}
       <label>Origem</label><select id="origin">${ORIGINS.map(o => `<option ${o === x.origin ? "selected" : ""}>${o}</option>`).join("")}</select>
       <div class="two">
         <div><label>Saúde Máx</label><input id="hm" type="number" value="${x.healthMax}"></div>
@@ -666,9 +608,69 @@ function characterModal(index = null) {
           </div>`).join("")}
       </div>
 
-      <br><button class="secondary" onclick="this.closest('.modal').remove()">Cancelar</button>
+      <h3 style="margin-top:20px;">🎭 Expressões / Retratos Alternativos</h3>
+      <div id="expressionsContainer" style="display:flex; flex-direction:column; gap:10px; margin-bottom:10px;">
+        ${x.expressions.map((ex, eIdx) => `
+          <div style="display:flex; gap:10px; align-items:center; background:var(--card-bg); padding:8px; border-radius:6px; border:1px solid var(--card-border);">
+            <img src="${ex.image}" style="width:40px; height:40px; object-fit:cover; border-radius:4px; cursor:pointer;" onclick="openImageModal('${ex.image}', '${esc(ex.name)}')">
+            <div style="flex:1;">
+              <input type="text" id="ex_name_${eIdx}" value="${esc(ex.name)}" placeholder="Nome da expressão (Ex: Bravo, Ferido)" style="margin:0;">
+            </div>
+            <button class="danger" style="padding:6px 10px;" onclick="removeExpressionField(${eIdx})">🗑️</button>
+          </div>
+        `).join("")}
+      </div>
+      <button class="secondary" onclick="addExpressionField()">➕ Adicionar Expressão</button>
+
+      <br><br>
+      <button class="secondary" onclick="this.closest('.modal').remove()">Cancelar</button>
       <button onclick="saveCharacter(${index})">Salvar</button>
     </div></div>`);
+}
+
+// Auxiliares dinâmicos para gerenciar campos de expressões na modal
+let tempExpressionsCache = [];
+
+function addExpressionField() {
+  collectExpressionsFromDOM();
+  tempExpressionsCache.push({ name: "", image: "" });
+  rebuildExpressionsModalList();
+}
+
+function removeExpressionField(eIdx) {
+  collectExpressionsFromDOM();
+  tempExpressionsCache.splice(eIdx, 1);
+  rebuildExpressionsModalList();
+}
+
+function collectExpressionsFromDOM() {
+  const container = document.getElementById("expressionsContainer");
+  if (!container) return;
+  const rows = container.children;
+  tempExpressionsCache = [];
+  for (let i = 0; i < rows.length; i++) {
+    const nameInput = document.getElementById(`ex_name_${i}`);
+    const name = nameInput ? nameInput.value : "";
+    // Mantém a imagem já existente no array temporário
+    const existingImg = (window._currentEditingCharExpressions && window._currentEditingCharExpressions[i]?.image) || "";
+    tempExpressionsCache.push({ name, image: existingImg });
+  }
+}
+
+function rebuildExpressionsModalList() {
+  const container = document.getElementById("expressionsContainer");
+  if (!container) return;
+  window._currentEditingCharExpressions = tempExpressionsCache;
+  container.innerHTML = tempExpressionsCache.map((ex, eIdx) => `
+    <div style="display:flex; gap:10px; align-items:center; background:var(--card-bg); padding:8px; border-radius:6px; border:1px solid var(--card-border);">
+      ${ex.image ? `<img src="${ex.image}" style="width:40px; height:40px; object-fit:cover; border-radius:4px; cursor:pointer;" onclick="openImageModal('${ex.image}', '${esc(ex.name)}')">` : '<span style="font-size:11px; color:var(--muted);">Sem foto</span>'}
+      <div style="flex:1; display:flex; flex-direction:column; gap:4px;">
+        <input type="text" id="ex_name_${eIdx}" value="${esc(ex.name)}" placeholder="Nome da expressão" style="margin:0;">
+        <input type="file" id="ex_file_${eIdx}" accept="image/*" style="font-size:11px; padding:2px;">
+      </div>
+      <button class="danger" style="padding:6px 10px;" onclick="removeExpressionField(${eIdx})">🗑️</button>
+    </div>
+  `).join("");
 }
 
 async function saveCharacter(index) {
@@ -693,6 +695,25 @@ async function saveCharacter(index) {
     const maxInput = document.getElementById(`sk_max_${idx}`);
     if (maxInput) { s.maxUses = parseInt(maxInput.value) || 0; if (s.uses > s.maxUses) s.uses = s.maxUses; }
   });
+
+  // Salvar Expressões Dinâmicas e processar novos uploads de imagem de expressão se houver
+  const container = document.getElementById("expressionsContainer");
+  if (container) {
+    const rows = container.children;
+    const newExpressions = [];
+    for (let i = 0; i < rows.length; i++) {
+      const nameInput = document.getElementById(`ex_name_${i}`);
+      const fileInput = document.getElementById(`ex_file_${i}`);
+      const name = nameInput ? nameInput.value.trim() : "Expressão";
+      let img = (c.expressions && c.expressions[i]?.image) || "";
+      if (fileInput && fileInput.files[0]) {
+        const uploaded = await readImg(fileInput.files[0]);
+        if (uploaded) img = uploaded;
+      }
+      newExpressions.push({ name, image: img });
+    }
+    c.expressions = newExpressions;
+  }
 
   const im = await readImg(document.getElementById("photo").files[0]);
   if (im) c.image = im;
@@ -807,9 +828,23 @@ async function submitPlayerTransfer(fromCharName) {
 
 function sheetPlayer(ch) {
   ch.skills ??= [];
+  ch.expressions ??= [];
+  const activeExImg = ch.expressions.find(e => e.name === ch.activeExpression)?.image || ch.image;
+
   return `
     <h2>👤 ${esc(ch.name)}</h2>
-    ${ch.image ? `<img class="avatar" src="${ch.image}" style="cursor:pointer;" onclick="openImageModal('${ch.image}', '${esc(ch.name)}')">` : ""}
+    ${activeExImg ? `<img class="avatar" src="${activeExImg}" style="cursor:pointer;" onclick="openImageModal('${activeExImg}', '${esc(ch.name)}')">` : ""}
+    
+    ${ch.expressions.length > 0 ? `
+      <div style="margin: 10px 0; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+        <span class="muted" style="font-size:12px;">Expressão:</span>
+        <button class="secondary" style="padding:4px 8px; font-size:11px; ${!ch.activeExpression ? 'border-color:var(--accent);' : ''}" onclick="setCharExpression('${ch.id}', '')">Normal</button>
+        ${ch.expressions.map(ex => `
+          <button class="secondary" style="padding:4px 8px; font-size:11px; ${ch.activeExpression === ex.name ? 'border-color:var(--accent);' : ''}" onclick="setCharExpression('${ch.id}', '${esc(ex.name)}')">${esc(ex.name)}</button>
+        `).join("")}
+      </div>
+    ` : ""}
+
     <span class="tag">Origem: ${esc(ch.origin)}</span>
     <div class="grid" style="margin-top:15px;">
       <div class="card"><h3>❤️ Saúde</h3><h2 id="val-health">${ch.health}/${ch.healthMax}</h2><div class="bar"><div id="bar-health" class="fill health" style="width:${(ch.health/ch.healthMax)*100}%"></div></div><button onclick="changeStatDirect('health',-1)">−</button><button onclick="changeStatDirect('health',1)">+</button></div>
@@ -834,6 +869,14 @@ function sheetPlayer(ch) {
           </div>`).join("") || "<p class='muted'>Nenhuma habilidade.</p>"}
       </div>
     </div>`;
+}
+
+function setCharExpression(charId, exprName) {
+  const ch = session.campaign.characters.find(x => x.id === charId);
+  if (!ch) return;
+  ch.activeExpression = exprName;
+  save();
+  render();
 }
 
 function changeSkillUses(charId, idx, delta) {
@@ -1230,4 +1273,3 @@ function rollAttribute(name, mod) { rollDice(20, mod, `Atributo: ${name}`); }
 function rollSkill(name, mod) { rollDice(20, mod, `Habilidade: ${name}`); }
 
 render();
-            
